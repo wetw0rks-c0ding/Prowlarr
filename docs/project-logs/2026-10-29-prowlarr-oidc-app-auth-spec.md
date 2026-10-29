@@ -72,7 +72,7 @@ Create `src/Prowlarr.Http/Authentication/ProwlarrServiceTokenService.cs`:
 ### 2) Update Authentik Token Validation (arrstack compat)
 Update `src/Prowlarr.Http/Authentication/AuthentikTokenValidationService.cs`:
 - Default/fallback issuer → `https://auth.piracyhub.win/application/o/arrstack/`
-- Audience validation: if `OidcClientId` configured, accept exact match OR `arrstack` (case-insensitive); else accept any audience containing `arrstack`, `prowlarr`, `sonarr`, `radarr`, `lidarr`, or `prowlarr` (substring fallback for tests)
+- Audience validation: if `OidcClientId` configured, accept exact match OR `arrstack` (case-insensitive); else accept any audience containing `arrstack`, `prowlarr`, `sonarr`, `radarr`, `lidarr`, or `readarr` (substring fallback for tests)
 
 ### 3) Add Endpoints to Controller
 Update `src/Prowlarr.Http/Authentication/AuthenticationController.cs`:
@@ -105,6 +105,7 @@ Update `src/Prowlarr.Http/Authentication/AuthenticationBuilderExtensions.cs`:
 
 ## Notes
 - Prowlarr is admin-only; no role enum/permission handler needed like Sonarr/Radarr
-- `UserService.UpsertOidcUser` signature in Prowlarr takes `(subject, username, groups)` and assigns `Role = ProwlarrRole.Admin` internally (per subagent findings)
+- `UserService.UpsertOidcUser` signature in Prowlarr is `(subject, username, groups)` with no role parameter (Prowlarr has no role system; authorization is binary via `OidcGroupMapping.IsAuthorized`)
+- `TryAuthorizeWithGroups` falls back to matching `OidcUserIdentifier` for the browser callback (exchange endpoint stays group-gated)
 - Must not break existing OIDC callback flow
 - Follow existing code style (tabs/spaces as in file, error messages match pattern)
