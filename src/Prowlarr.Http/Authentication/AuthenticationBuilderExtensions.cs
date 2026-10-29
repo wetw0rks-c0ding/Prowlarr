@@ -262,10 +262,25 @@ namespace Prowlarr.Http.Authentication
                             try
                             {
                                 var uri = new Uri(redirectUri);
-                                if (!uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase) &&
-                                    !System.Net.IPAddress.TryParse(uri.Host, out _))
+                                if (!uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase))
                                 {
-                                    context.ProtocolMessage.RedirectUri = "https://" + redirectUri.Substring(7);
+                                    // Derive public-facing scheme from the request, honoring
+                                    // ForwardedHeaders (X-Forwarded-Proto) for TLS-terminating proxies.
+                                    var scheme = context.HttpContext.Request.Scheme;
+                                    if (context.HttpContext.Request.Headers.TryGetValue("X-Forwarded-Proto", out var protoVals))
+                                    {
+                                        var proto = protoVals.FirstOrDefault();
+                                        if ("https".Equals(proto, StringComparison.OrdinalIgnoreCase))
+                                            scheme = "https";
+                                    }
+
+                                    // Upgrade only when the incoming request arrived over https;
+                                    // never force-upgrade an HTTP-only hostname, and never leave
+                                    // http behind a proxy that forwarded https.
+                                    if ("https".Equals(scheme, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        context.ProtocolMessage.RedirectUri = "https://" + redirectUri.Substring(7);
+                                    }
                                 }
                             }
                             catch (UriFormatException ex)
@@ -359,35 +374,33 @@ namespace Prowlarr.Http.Authentication
             var groupsClaimName = configFileProvider.OidcGroupsClaim ?? "groups";
             var groups = new List<string>();
 
+            // Try configured claim first; only fall back to "groups"/"memberOf" if it yields zero groups.
+            bool configuredHasGroups = false;
             if (user.HasValue)
             {
                 if (TryGetProperty(user.Value, groupsClaimName, out var groupsElement))
                 {
                     ExtractGroups(groupsElement, groups);
+                    configuredHasGroups = groups.Count > 0;
                 }
             }
 
-            if (groups.Count == 0 && principal != null)
+            if (!configuredHasGroups && principal != null)
             {
-                var claimNames = new List<string> { groupsClaimName };
-                if (!string.Equals(groupsClaimName, "groups", StringComparison.OrdinalIgnoreCase)) claimNames.Add("groups");
-                if (!string.Equals(groupsClaimName, "memberOf", StringComparison.OrdinalIgnoreCase)) claimNames.Add("memberOf");
-
-                var claimValues = new List<string>();
-                foreach (var name in claimNames.Distinct(StringComparer.OrdinalIgnoreCase))
+                var configuredValues = new List<string>();
+                var configuredClaims = principal.FindAll(groupsClaimName);
+                if (configuredClaims != null)
                 {
-                    var claims = principal.FindAll(name);
-                    if (claims != null)
+                    foreach (var c in configuredClaims)
                     {
-                        foreach (var c in claims)
+                        if (c != null && !string.IsNullOrWhiteSpace(c.Value))
                         {
-                            if (c != null && !string.IsNullOrWhiteSpace(c.Value))
-                                claimValues.Add(c.Value);
+                            configuredValues.Add(c.Value);
                         }
                     }
                 }
 
-                foreach (var value in claimValues)
+                foreach (var value in configuredValues)
                 {
                     var trimmed = value.Trim();
                     if (trimmed.StartsWith('['))
@@ -411,6 +424,54 @@ namespace Prowlarr.Http.Authentication
                     else
                     {
                         groups.Add(trimmed);
+                    }
+                }
+
+                if (groups.Count == 0)
+                {
+                    var claimNames = new List<string>();
+                    if (!string.Equals(groupsClaimName, "groups", StringComparison.OrdinalIgnoreCase)) claimNames.Add("groups");
+                    if (!string.Equals(groupsClaimName, "memberOf", StringComparison.OrdinalIgnoreCase)) claimNames.Add("memberOf");
+
+                    var claimValues = new List<string>();
+                    foreach (var name in claimNames.Distinct(StringComparer.OrdinalIgnoreCase))
+                    {
+                        var claims = principal.FindAll(name);
+                        if (claims != null)
+                        {
+                            foreach (var c in claims)
+                            {
+                                if (c != null && !string.IsNullOrWhiteSpace(c.Value))
+                                    claimValues.Add(c.Value);
+                            }
+                        }
+                    }
+
+                    foreach (var value in claimValues)
+                    {
+                        var trimmed = value.Trim();
+                        if (trimmed.StartsWith('['))
+                        {
+                            try
+                            {
+                                var parsed = JsonSerializer.Deserialize<List<string>>(trimmed);
+                                if (parsed != null)
+                                {
+                                    groups.AddRange(parsed.Where(g => !string.IsNullOrWhiteSpace(g)));
+                                }
+                            }
+                            catch
+                            {
+                            }
+                        }
+                        else if (trimmed.Contains(','))
+                        {
+                            groups.AddRange(trimmed.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+                        }
+                        else
+                        {
+                            groups.Add(trimmed);
+                        }
                     }
                 }
 

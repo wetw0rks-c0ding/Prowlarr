@@ -155,33 +155,22 @@ namespace Prowlarr.Http.Authentication
 
                     var groupsClaimName = _configFileProvider?.OidcGroupsClaim ?? "groups";
                     var groups = new List<string>();
-                    var claimNames = new List<string> { groupsClaimName };
-                    if (!string.Equals(groupsClaimName, "groups", StringComparison.OrdinalIgnoreCase))
-                    {
-                        claimNames.Add("groups");
-                    }
-                    if (!string.Equals(groupsClaimName, "memberOf", StringComparison.OrdinalIgnoreCase))
-                    {
-                        claimNames.Add("memberOf");
-                    }
 
-                    var claimValues = new List<string>();
-                    foreach (var name in claimNames.Distinct(StringComparer.OrdinalIgnoreCase))
+                    // Try configured claim first; only fall back to "groups"/"memberOf" if it yields zero groups.
+                    var configuredValues = new List<string>();
+                    var configuredClaims = principal?.FindAll(groupsClaimName);
+                    if (configuredClaims != null)
                     {
-                        var claims = principal?.FindAll(name);
-                        if (claims != null)
+                        foreach (var c in configuredClaims)
                         {
-                            foreach (var c in claims)
+                            if (c != null && !string.IsNullOrWhiteSpace(c.Value))
                             {
-                                if (c != null && !string.IsNullOrWhiteSpace(c.Value))
-                        {
-                            claimValues.Add(c.Value);
-                        }
+                                configuredValues.Add(c.Value);
                             }
                         }
                     }
 
-                    foreach (var value in claimValues)
+                    foreach (var value in configuredValues)
                     {
                         var trimmed = value.Trim();
                         if (trimmed.StartsWith('['))
@@ -205,6 +194,62 @@ namespace Prowlarr.Http.Authentication
                         else
                         {
                             groups.Add(trimmed);
+                        }
+                    }
+
+                    if (groups.Count == 0)
+                    {
+                        var claimNames = new List<string>();
+                        if (!string.Equals(groupsClaimName, "groups", StringComparison.OrdinalIgnoreCase))
+                        {
+                            claimNames.Add("groups");
+                        }
+                        if (!string.Equals(groupsClaimName, "memberOf", StringComparison.OrdinalIgnoreCase))
+                        {
+                            claimNames.Add("memberOf");
+                        }
+
+                        var claimValues = new List<string>();
+                        foreach (var name in claimNames.Distinct(StringComparer.OrdinalIgnoreCase))
+                        {
+                            var claims = principal?.FindAll(name);
+                            if (claims != null)
+                            {
+                                foreach (var c in claims)
+                                {
+                                    if (c != null && !string.IsNullOrWhiteSpace(c.Value))
+                                    {
+                                        claimValues.Add(c.Value);
+                                    }
+                                }
+                            }
+                        }
+
+                        foreach (var value in claimValues)
+                        {
+                            var trimmed = value.Trim();
+                            if (trimmed.StartsWith('['))
+                            {
+                                try
+                                {
+                                    var parsed = System.Text.Json.JsonSerializer.Deserialize<List<string>>(trimmed);
+                                    if (parsed != null)
+                                    {
+                                        groups.AddRange(parsed.Where(g => !string.IsNullOrWhiteSpace(g)));
+                                    }
+                                }
+                                catch
+                                {
+                                }
+                            }
+                            else if (trimmed.Contains(','))
+                            {
+                                groups.AddRange(trimmed.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+                            }
+                            else
+                            {
+                                groups.Add(trimmed);
+                            }
                         }
                     }
 
