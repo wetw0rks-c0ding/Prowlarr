@@ -136,12 +136,12 @@ namespace Prowlarr.Http.Authentication
                             ? (audiences, securityToken, validationParameters) => audiences != null && audiences.Any(a => string.Equals(a, expectedAudience, StringComparison.Ordinal) ||
                                                                                                                                  string.Equals(a, "arrstack", StringComparison.OrdinalIgnoreCase))
                             : (audiences, securityToken, validationParameters) => audiences != null && audiences.Any(audience => !string.IsNullOrWhiteSpace(audience) &&
-                                                                                                                                 (audience.Contains("arrstack", StringComparison.OrdinalIgnoreCase) ||
-                                                                                                                                  audience.Contains(RequiredAudienceSubstring, StringComparison.OrdinalIgnoreCase) ||
+                                                                                                                                 (audience.Contains(RequiredAudienceSubstring, StringComparison.OrdinalIgnoreCase) ||
                                                                                                                                   audience.Contains("sonarr", StringComparison.OrdinalIgnoreCase) ||
                                                                                                                                   audience.Contains("radarr", StringComparison.OrdinalIgnoreCase) ||
                                                                                                                                   audience.Contains("lidarr", StringComparison.OrdinalIgnoreCase) ||
-                                                                                                                                  audience.Contains("prowlarr", StringComparison.OrdinalIgnoreCase))),
+                                                                                                                                  audience.Contains("prowlarr", StringComparison.OrdinalIgnoreCase) ||
+                                                                                                                                  audience.Contains("readarr", StringComparison.OrdinalIgnoreCase))),
                         ValidateLifetime = true,
                         ClockSkew = TimeSpan.FromMinutes(2),
                         IssuerSigningKeys = signingKeys.Count > 0 ? signingKeys : null,
@@ -155,15 +155,40 @@ namespace Prowlarr.Http.Authentication
 
                     var groupsClaimName = _configFileProvider?.OidcGroupsClaim ?? "groups";
                     var groups = new List<string>();
-                    var groupsClaim = principal?.FindFirst(groupsClaimName);
-                    if (groupsClaim != null && !string.IsNullOrWhiteSpace(groupsClaim.Value))
+                    var claimNames = new List<string> { groupsClaimName };
+                    if (!string.Equals(groupsClaimName, "groups", StringComparison.OrdinalIgnoreCase))
                     {
-                        var value = groupsClaim.Value;
-                        if (value.Trim().StartsWith('['))
+                        claimNames.Add("groups");
+                    }
+                    if (!string.Equals(groupsClaimName, "memberOf", StringComparison.OrdinalIgnoreCase))
+                    {
+                        claimNames.Add("memberOf");
+                    }
+
+                    var claimValues = new List<string>();
+                    foreach (var name in claimNames.Distinct(StringComparer.OrdinalIgnoreCase))
+                    {
+                        var claims = principal?.FindAll(name);
+                        if (claims != null)
+                        {
+                            foreach (var c in claims)
+                            {
+                                if (c != null && !string.IsNullOrWhiteSpace(c.Value))
+                        {
+                            claimValues.Add(c.Value);
+                        }
+                            }
+                        }
+                    }
+
+                    foreach (var value in claimValues)
+                    {
+                        var trimmed = value.Trim();
+                        if (trimmed.StartsWith('['))
                         {
                             try
                             {
-                                var parsed = System.Text.Json.JsonSerializer.Deserialize<List<string>>(value);
+                                var parsed = System.Text.Json.JsonSerializer.Deserialize<List<string>>(trimmed);
                                 if (parsed != null)
                                 {
                                     groups.AddRange(parsed.Where(g => !string.IsNullOrWhiteSpace(g)));
@@ -173,15 +198,27 @@ namespace Prowlarr.Http.Authentication
                             {
                             }
                         }
-                        else if (value.Contains(','))
+                        else if (trimmed.Contains(','))
                         {
-                            groups.AddRange(value.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+                            groups.AddRange(trimmed.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
                         }
                         else
                         {
-                            groups.Add(value.Trim());
+                            groups.Add(trimmed);
                         }
                     }
+
+                    // Deduplicate case-insensitively preserving first occurrence
+                    var deduped = new List<string>();
+                    var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var g in groups)
+                    {
+                        if (seen.Add(g))
+                        {
+                            deduped.Add(g);
+                        }
+                    }
+                    groups = deduped;
 
                     if (string.IsNullOrWhiteSpace(subject))
                     {

@@ -247,6 +247,36 @@ namespace Prowlarr.Http.Authentication
                         return Task.CompletedTask;
                     };
 
+                    options.Events.OnRedirectToIdentityProvider = context =>
+                    {
+                        // Servarr sits behind TLS-terminating tailscale serve via a Docker
+                        // bridge peer, so HttpRequest.Scheme is http even though the user
+                        // arrived over https. Authentik would then send the browser back
+                        // to an http:// callback on a TLS-only port (connection reset).
+                        // Force https for non-loopback redirect URIs; loopback stays http
+                        // for native/PKCE flows. Both schemes are registered in Authentik.
+                        var redirectUri = context.ProtocolMessage?.RedirectUri;
+                        if (!string.IsNullOrWhiteSpace(redirectUri) &&
+                            redirectUri.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+                        {
+                            try
+                            {
+                                var uri = new Uri(redirectUri);
+                                if (!uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase) &&
+                                    !System.Net.IPAddress.TryParse(uri.Host, out _))
+                                {
+                                    context.ProtocolMessage.RedirectUri = "https://" + redirectUri.Substring(7);
+                                }
+                            }
+                            catch (UriFormatException ex)
+                            {
+                                Logger.Warn(ex, "Unable to parse OIDC redirect URI '{0}'", redirectUri);
+                            }
+                        }
+
+                        return Task.CompletedTask;
+                    };
+
                     options.Events.OnRedirectToIdentityProviderForSignOut = context =>
                     {
                         if (context.ProtocolMessage.IssuerAddress.IsNullOrWhiteSpace())
@@ -339,15 +369,32 @@ namespace Prowlarr.Http.Authentication
 
             if (groups.Count == 0 && principal != null)
             {
-                var claim = principal.FindFirst(groupsClaimName) ?? principal.FindFirst("groups") ?? principal.FindFirst("memberOf");
-                if (claim != null && !string.IsNullOrWhiteSpace(claim.Value))
+                var claimNames = new List<string> { groupsClaimName };
+                if (!string.Equals(groupsClaimName, "groups", StringComparison.OrdinalIgnoreCase)) claimNames.Add("groups");
+                if (!string.Equals(groupsClaimName, "memberOf", StringComparison.OrdinalIgnoreCase)) claimNames.Add("memberOf");
+
+                var claimValues = new List<string>();
+                foreach (var name in claimNames.Distinct(StringComparer.OrdinalIgnoreCase))
                 {
-                    var value = claim.Value;
-                    if (value.Trim().StartsWith('['))
+                    var claims = principal.FindAll(name);
+                    if (claims != null)
+                    {
+                        foreach (var c in claims)
+                        {
+                            if (c != null && !string.IsNullOrWhiteSpace(c.Value))
+                                claimValues.Add(c.Value);
+                        }
+                    }
+                }
+
+                foreach (var value in claimValues)
+                {
+                    var trimmed = value.Trim();
+                    if (trimmed.StartsWith('['))
                     {
                         try
                         {
-                            var parsed = JsonSerializer.Deserialize<List<string>>(value);
+                            var parsed = JsonSerializer.Deserialize<List<string>>(trimmed);
                             if (parsed != null)
                             {
                                 groups.AddRange(parsed.Where(g => !string.IsNullOrWhiteSpace(g)));
@@ -357,15 +404,24 @@ namespace Prowlarr.Http.Authentication
                         {
                         }
                     }
-                    else if (value.Contains(','))
+                    else if (trimmed.Contains(','))
                     {
-                        groups.AddRange(value.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+                        groups.AddRange(trimmed.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
                     }
                     else
                     {
-                        groups.Add(value.Trim());
+                        groups.Add(trimmed);
                     }
                 }
+
+                // Deduplicate case-insensitively preserving first occurrence
+                var deduped = new List<string>();
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var g in groups)
+                {
+                    if (seen.Add(g)) deduped.Add(g);
+                }
+                groups = deduped;
             }
 
             // Prowlarr is admin-only: any tier-2+ group authorizes as admin.
