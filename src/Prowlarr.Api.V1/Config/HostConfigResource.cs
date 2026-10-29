@@ -21,6 +21,12 @@ namespace Prowlarr.Api.V1.Config
         public string Username { get; set; }
         public string Password { get; set; }
         public string PasswordConfirmation { get; set; }
+        public string OidcAuthority { get; set; }
+        public string OidcClientId { get; set; }
+        public string OidcClientSecret { get; set; }
+        public string OidcUserIdentifier { get; set; }
+        public string OidcScopes { get; set; }
+        public string OidcGroupsClaim { get; set; }
         public string LogLevel { get; set; }
         public int LogSizeLimit { get; set; }
         public string ConsoleLogLevel { get; set; }
@@ -70,6 +76,12 @@ namespace Prowlarr.Api.V1.Config
 
                 //Username
                 //Password
+                OidcAuthority = model.OidcAuthority,
+                OidcClientId = model.OidcClientId,
+                OidcClientSecret = model.OidcClientSecret,
+                OidcUserIdentifier = model.OidcUserIdentifier,
+                OidcScopes = model.OidcScopes,
+                OidcGroupsClaim = model.OidcGroupsClaim,
                 LogLevel = model.LogLevel,
                 LogSizeLimit = model.LogSizeLimit,
                 ConsoleLogLevel = model.ConsoleLogLevel,

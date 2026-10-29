@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Security.Cryptography;
 using Microsoft.AspNetCore.Cryptography.KeyDerivation;
 using NzbDrone.Common.Disk;
@@ -12,6 +13,7 @@ namespace NzbDrone.Core.Authentication
         User Add(string username, string password);
         User Update(User user);
         User Upsert(string username, string password);
+        User UpsertOidcUser(string subject, string username, string groups);
         User FindUser();
         User FindUser(string username, string password);
         User FindUser(Guid identifier);
@@ -73,7 +75,26 @@ namespace NzbDrone.Core.Authentication
 
         public User FindUser()
         {
-            return _repo.SingleOrDefault();
+            // Single-user assumption broke with OIDC: provisioned OIDC rows share
+            // the table with the legacy forms user. Settings endpoints only need
+            // the local (non-OIDC) user, so scope the lookup to OidcSubject == null.
+            var local = (_repo.All() ?? Enumerable.Empty<User>())
+                .Where(u => u.OidcSubject == null)
+                .SingleOrDefault();
+
+            if (local == null)
+            {
+                try
+                {
+                    local = _repo.FindLocalUser();
+                }
+                catch
+                {
+                    // Fall back to in-memory scan if the repository does not support FindLocalUser.
+                }
+            }
+
+            return local;
         }
 
         public User FindUser(string username, string password)
@@ -114,6 +135,49 @@ namespace NzbDrone.Core.Authentication
         public User FindUser(Guid identifier)
         {
             return _repo.FindUser(identifier);
+        }
+
+        public User UpsertOidcUser(string subject, string username, string groups)
+        {
+            if (string.IsNullOrWhiteSpace(subject))
+            {
+                throw new ArgumentException("Subject is required", nameof(subject));
+            }
+
+            var existing = _repo.FindBySubject(subject);
+            if (existing != null)
+            {
+                var updated = existing;
+                if (!string.IsNullOrWhiteSpace(username))
+                {
+                    updated.Username = username.ToLowerInvariant();
+                }
+
+                updated.OidcGroups = groups;
+                return _repo.Update(updated);
+            }
+
+            var normalizedUsername = string.IsNullOrWhiteSpace(username) ? subject.ToLowerInvariant() : username.ToLowerInvariant();
+
+            var newUser = new User
+            {
+                Identifier = Guid.NewGuid(),
+                Username = normalizedUsername,
+                Password = string.Empty,
+                Salt = string.Empty,
+                Iterations = 0,
+                OidcSubject = subject,
+                OidcGroups = groups
+            };
+
+            try
+            {
+                return _repo.Insert(newUser);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException("Failed to insert OIDC user (username may already exist): " + ex.Message, ex);
+            }
         }
 
         private User SetUserHashedPassword(User user, string password)

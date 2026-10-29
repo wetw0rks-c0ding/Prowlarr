@@ -36,6 +36,12 @@ namespace NzbDrone.Core.Configuration
         bool LaunchBrowser { get; }
         AuthenticationType AuthenticationMethod { get; }
         AuthenticationRequiredType AuthenticationRequired { get; }
+        string OidcAuthority { get; }
+        string OidcClientId { get; }
+        string OidcClientSecret { get; }
+        string OidcUserIdentifier { get; }
+        string OidcScopes { get; }
+        string OidcGroupsClaim { get; }
         string AllowedHosts { get; }
         bool AnalyticsEnabled { get; }
         string LogLevel { get; }
@@ -238,6 +244,12 @@ namespace NzbDrone.Core.Configuration
                 : GetValueEnum("AuthenticationRequired", AuthenticationRequiredType.Enabled);
 
         public bool TrustCgnatIpAddresses => _authOptions.TrustCgnatIpAddresses ?? GetValueBoolean("TrustCgnatIpAddresses", false, persist: false);
+        public string OidcAuthority => _authOptions.OidcAuthority ?? GetValue("OidcAuthority", string.Empty, persist: false);
+        public string OidcClientId => _authOptions.OidcClientId ?? GetValue("OidcClientId", string.Empty, persist: false);
+        public string OidcClientSecret => _authOptions.OidcClientSecret ?? GetValue("OidcClientSecret", string.Empty, persist: false);
+        public string OidcUserIdentifier => _authOptions.OidcUserIdentifier ?? GetValue("OidcUserIdentifier", string.Empty, persist: false);
+        public string OidcScopes => _authOptions.OidcScopes ?? GetValue("OidcScopes", "openid profile email", persist: false);
+        public string OidcGroupsClaim => _authOptions.OidcGroupsClaim ?? GetValue("OidcGroupsClaim", "groups", persist: false);
 
         public string AllowedHosts => _serverOptions.AllowedHosts ?? GetValue("AllowedHosts", string.Empty);
 

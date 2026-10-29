@@ -173,7 +173,8 @@ namespace NzbDrone.Host
                 });
 
                 // Require auth on everything except those marked [AllowAnonymous]
-                options.FallbackPolicy = new AuthorizationPolicyBuilder("API")
+                // "Bearer" accepts Seekarr-minted OIDC service tokens alongside API keys.
+                options.FallbackPolicy = new AuthorizationPolicyBuilder("API", "Bearer")
                 .RequireAuthenticatedUser()
                 .Build();
             });
