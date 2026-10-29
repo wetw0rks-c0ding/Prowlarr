@@ -126,6 +126,11 @@ namespace Prowlarr.Http.Authentication
                                 }
                             }
 
+                            if (principal.FindFirst("prowlarr_role") == null)
+                            {
+                                identity.AddClaim(new Claim("prowlarr_role", "Admin"));
+                            }
+
                             return Task.CompletedTask;
                         }
                     };

@@ -144,7 +144,7 @@ namespace Prowlarr.Http.Authentication
                 token_type = "Bearer",
                 expires_in = 300,
                 role = "Admin",
-                permissions = new[] { "admin" },
+                permissions = new[] { "UI.Read", "UI.Add", "UI.Manage", "UI.Admin" },
             },
             statusCode: StatusCodes.Status200OK);
         }
@@ -190,7 +190,7 @@ namespace Prowlarr.Http.Authentication
                 username = user.Username,
                 role = "Admin",
                 groups,
-                permissions = new[] { "admin" },
+                permissions = new[] { "UI.Read", "UI.Add", "UI.Manage", "UI.Admin" },
             },
             statusCode: StatusCodes.Status200OK);
         }

@@ -26,7 +26,7 @@ namespace Prowlarr.Http.Authentication
 
         public const string Issuer = FallbackIssuer;
 
-        public const string RequiredAudienceSubstring = "prowlarr";
+        public const string RequiredAudienceSubstring = "arrstack";
 
         private static readonly Logger Logger = LogManager.GetLogger(nameof(AuthentikTokenValidationService));
 

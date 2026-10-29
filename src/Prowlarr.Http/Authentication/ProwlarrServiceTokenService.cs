@@ -131,4 +131,12 @@ namespace Prowlarr.Http.Authentication
             }
         }
     }
+
+    public static class ProwlarrRolePermissions
+    {
+        public static string[] ForAdmin()
+        {
+            return new[] { "UI.Read", "UI.Add", "UI.Manage", "UI.Admin" };
+        }
+    }
 }
