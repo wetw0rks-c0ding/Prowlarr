@@ -1,5 +1,7 @@
 # Prowlarr
 
+> **Fork note — OIDC build for Seekarr:** this fork adds Authentik OIDC group-based authorization and Seekarr mobile app-auth (`POST /api/auth/oidc/exchange`, `GET /api/auth/me`) on top of upstream. Prowlarr is admin-only: `pirates` blocked (403), `homies` and up authorized as admin. Unified provider `https://auth.piracyhub.win/application/o/arrstack/` (per-service `.../o/prowlarr/` etc. also accepted). Branch: `feature/oidc-app-auth`. Prebuilt image: `ghcr.io/wetw0rks-c0ding/prowlarr-oidc:feature-oidc-app-auth` (port 9696). Details in `docs/project-logs/`. These are fork-only patches, not intended for upstream.
+
 [![Build Status](https://dev.azure.com/Prowlarr/Prowlarr/_apis/build/status/Prowlarr.Prowlarr?branchName=develop)](https://dev.azure.com/Prowlarr/Prowlarr/_build/latest?definitionId=1&branchName=develop)
 [![Translation status](https://translate.servarr.com/widget/servarr/prowlarr/svg-badge.svg)](https://translate.servarr.com/engage/servarr/?utm_source=widget)
 [![Docker Pulls](https://img.shields.io/docker/pulls/hotio/prowlarr.svg)](https://wiki.servarr.com/prowlarr/installation/docker)
