@@ -13,7 +13,6 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
-using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.Net.Http.Headers;
@@ -58,7 +57,7 @@ namespace Prowlarr.Http.Authentication
         public static AuthenticationBuilder AddAppAuthentication(this IServiceCollection services)
         {
             services.AddSingleton<IProwlarrServiceTokenService, ProwlarrServiceTokenService>();
-            services.AddSingleton<IAuthentikTokenValidationService, AuthentikTokenValidationService>();
+            services.AddSingleton<IOidcTokenValidationService, OidcTokenValidationService>();
 
             var builder = services.AddAuthentication(options =>
                 {
@@ -271,7 +270,9 @@ namespace Prowlarr.Http.Authentication
                                     {
                                         var proto = protoVals.FirstOrDefault();
                                         if ("https".Equals(proto, StringComparison.OrdinalIgnoreCase))
+                                        {
                                             scheme = "https";
+                                        }
                                     }
 
                                     // Upgrade only when the incoming request arrived over https;
@@ -375,7 +376,7 @@ namespace Prowlarr.Http.Authentication
             var groups = new List<string>();
 
             // Try configured claim first; only fall back to "groups"/"memberOf" if it yields zero groups.
-            bool configuredHasGroups = false;
+            var configuredHasGroups = false;
             if (user.HasValue)
             {
                 if (TryGetProperty(user.Value, groupsClaimName, out var groupsElement))
@@ -430,8 +431,15 @@ namespace Prowlarr.Http.Authentication
                 if (groups.Count == 0)
                 {
                     var claimNames = new List<string>();
-                    if (!string.Equals(groupsClaimName, "groups", StringComparison.OrdinalIgnoreCase)) claimNames.Add("groups");
-                    if (!string.Equals(groupsClaimName, "memberOf", StringComparison.OrdinalIgnoreCase)) claimNames.Add("memberOf");
+                    if (!string.Equals(groupsClaimName, "groups", StringComparison.OrdinalIgnoreCase))
+                    {
+                        claimNames.Add("groups");
+                    }
+
+                    if (!string.Equals(groupsClaimName, "memberOf", StringComparison.OrdinalIgnoreCase))
+                    {
+                        claimNames.Add("memberOf");
+                    }
 
                     var claimValues = new List<string>();
                     foreach (var name in claimNames.Distinct(StringComparer.OrdinalIgnoreCase))
@@ -442,7 +450,9 @@ namespace Prowlarr.Http.Authentication
                             foreach (var c in claims)
                             {
                                 if (c != null && !string.IsNullOrWhiteSpace(c.Value))
+                                {
                                     claimValues.Add(c.Value);
+                                }
                             }
                         }
                     }
@@ -480,13 +490,17 @@ namespace Prowlarr.Http.Authentication
                 var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (var g in groups)
                 {
-                    if (seen.Add(g)) deduped.Add(g);
+                    if (seen.Add(g))
+                    {
+                        deduped.Add(g);
+                    }
                 }
+
                 groups = deduped;
             }
 
             // Prowlarr is admin-only: any tier-2+ group authorizes as admin.
-            if (OidcGroupMapping.IsAuthorized(groups))
+            if (OidcGroupMapping.IsAuthorized(groups, configFileProvider.OidcRoleMappings))
             {
                 var claims = new List<Claim>
                 {
