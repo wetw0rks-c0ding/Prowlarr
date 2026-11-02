@@ -26,19 +26,21 @@ Goal: make the OIDC stack provider-neutral so any standards-compliant IdP works,
 ### 2) Rename + de-hardcode token validation
 - Rename `AuthentikTokenValidationService` → `OidcTokenValidationService` (interface `IAuthentikTokenValidationService` → `IOidcTokenValidationService`, impl, DI registrations, tests) in one commit per fork.
 - Delete `FallbackIssuer`/`Issuer`/`RequiredAudienceSubstring` consts and all substring audience logic.
-- `GetIssuer()`: return `OidcAuthority` verbatim (trimmed of trailing `/` only for discovery-URL construction, not for `ValidIssuer` — validate against the configured string exactly as the IdP advertises it).
-- Audience rule: if `OidcClientId` set → exact match only (drop the `arrstack` carve-out). If unset → fail closed, no validation attempted.
+- `GetIssuer()`: return `OidcAuthority` verbatim as `ValidIssuer` — validate against the configured string exactly as the IdP advertises it. Only the discovery-URL construction appends `/.well-known/openid-configuration`. (Behavior change vs. current code, which appends `/`: see §4 for the required config value.)
+- Audience rule: if `OidcClientId` set → exact match only (drop the `arrstack` carve-out). If unset → fail closed, no validation attempted. Note `HostConfigController.cs:80-81` already rejects empty `OidcClientId` when OIDC is the auth method, so the service-layer fail-closed is belt-and-braces, not a behavior change.
 - Lazy-init the `ConfigurationManager` on first `ValidateAsync` (currently constructed with a dummy URL when unconfigured).
 
-### 3) Fixtures + tests
-- Rename `*AuthentikTokenValidationService*Fixture` → `*OidcTokenValidationService*Fixture`; replace hardcoded `arrstack` issuer/aud strings with values from test config (`OidcAuthority`/`OidcClientId`).
-- Replace `OidcGroupMappingFixture` hardcoded groups with mapping-driven cases: exact match, case-insensitivity, highest-wins, unmapped → null, empty mapping → null, malformed pair ignored.
-- `AuthenticationControllerOidcFixture` (`/exchange`, `/me`): unchanged behavior, updated service names.
-- `UpsertOidcUserFixture`: unchanged.
+### 3) Fixtures + tests (Prowlarr: create from scratch)
+Prowlarr has no OIDC test fixtures today (no `*Authentik*Fixture`, `OidcGroupMappingFixture`, `AuthenticationControllerOidcFixture`, or `UpsertOidcUserFixture` in any `*.Test` project), so this step creates rather than renames:
+- New validation-service fixture for the renamed `OidcTokenValidationService`: exact-match audience accept/reject driven by test `OidcAuthority`/`OidcClientId` values (no hardcoded `arrstack` strings).
+- New mapping-resolver fixture: exact match, case-insensitivity, highest-wins (Sonarr/Radarr) / any-mapped (Prowlarr binary), unmapped → deny, empty mapping → deny, malformed pair ignored.
+- New `/exchange` + `/me` controller fixture: unchanged behavior from §1 contract, updated service names.
+- `UpsertOidcUser` coverage for subject-first provisioning (no username auto-link).
 
 ### 4) Migration / rollout
 - No DB migration (config-file/env only).
-- Backward compatible by configuration: set `OidcAuthority=https://auth.piracyhub.win/application/o/arrstack/`, `OidcClientId=arrstack`, `OidcRoleMappings=homies=ReadOnly;family=AddSearch;maintenance=Manage;authentik Admins=Admin` and the current deployment behaves identically.
+- Backward compatible by configuration: set `OidcAuthority=https://auth.piracyhub.win/application/o/arrstack/` (exact string **including the trailing slash**, matching what Authentik advertises as `iss`), `OidcClientId=arrstack`, `OidcRoleMappings=homies=ReadOnly;family=AddSearch;maintenance=Manage;authentik Admins=Admin` and the current deployment behaves identically.
+- `UpsertOidcUser` group persistence intentionally unchanged: the controller keeps storing raw IdP group names (`string.Join(",", validation.Groups)`) for audit; mapping only drives the allow/deny decision.
 - Update README fork banner (generic OIDC wording) + write per-fork project log.
 
 ## Non-goals
