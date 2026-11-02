@@ -106,7 +106,7 @@ namespace Prowlarr.Http.Authentication
                 return TypedResults.Json(new { message = "subject_token is required" }, statusCode: StatusCodes.Status400BadRequest);
             }
 
-            var authentik = httpContext.RequestServices?.GetService(typeof(IAuthentikTokenValidationService)) as IAuthentikTokenValidationService;
+            var authentik = httpContext.RequestServices?.GetService(typeof(IOidcTokenValidationService)) as IOidcTokenValidationService;
             if (authentik == null)
             {
                 return TypedResults.Json(new { message = "service_unavailable" }, statusCode: StatusCodes.Status500InternalServerError);
@@ -119,7 +119,7 @@ namespace Prowlarr.Http.Authentication
             }
 
             // Prowlarr is admin-only: tier-2+ group membership authorizes as admin.
-            if (!OidcGroupMapping.IsAuthorized(validation.Groups))
+            if (!OidcGroupMapping.IsAuthorized(validation.Groups, _configFileProvider.OidcRoleMappings))
             {
                 return TypedResults.Json(new { message = "insufficient_group" }, statusCode: StatusCodes.Status403Forbidden);
             }
