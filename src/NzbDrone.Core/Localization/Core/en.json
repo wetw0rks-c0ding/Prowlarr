@@ -121,6 +121,8 @@
   "BuiltIn": "Built-In",
   "BypassProxyForLocalAddresses": "Bypass Proxy for Local Addresses",
   "Cancel": "Cancel",
+  "CancelAll": "Cancel All",
+  "CancelAllQueuedTasksMessage": "Are you sure you want to cancel all queued tasks? Only tasks that are queued will be cancelled.",
   "CancelPendingTask": "Are you sure you want to cancel this pending task?",
   "Categories": "Categories",
   "Category": "Category",

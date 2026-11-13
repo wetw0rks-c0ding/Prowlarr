@@ -1,11 +1,15 @@
-import React, { useEffect } from 'react';
+import React, { useCallback, useEffect, useMemo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import AppState from 'App/State/AppState';
 import FieldSet from 'Components/FieldSet';
+import Button from 'Components/Link/Button';
 import LoadingIndicator from 'Components/Loading/LoadingIndicator';
+import ConfirmModal from 'Components/Modal/ConfirmModal';
 import Table from 'Components/Table/Table';
 import TableBody from 'Components/Table/TableBody';
-import { fetchCommands } from 'Store/Actions/commandActions';
+import useModalOpenState from 'Helpers/Hooks/useModalOpenState';
+import { kinds } from 'Helpers/Props';
+import { cancelCommand, fetchCommands } from 'Store/Actions/commandActions';
 import translate from 'Utilities/String/translate';
 import QueuedTaskRow from './QueuedTaskRow';
 
@@ -52,6 +56,33 @@ export default function QueuedTasks() {
     (state: AppState) => state.commands
   );
 
+  const [isCancelAllModalOpen, openCancelAllModal, closeCancelAllModal] =
+    useModalOpenState(false);
+
+  const queuedItems = useMemo(() => {
+    return items.filter((item) => item.status === 'queued');
+  }, [items]);
+
+  const handleCancelAllPress = useCallback(() => {
+    if (queuedItems.length === 0) {
+      return;
+    }
+
+    openCancelAllModal();
+  }, [openCancelAllModal, queuedItems.length]);
+
+  const handleCancelAllConfirm = useCallback(() => {
+    closeCancelAllModal();
+
+    if (queuedItems.length === 0) {
+      return;
+    }
+
+    queuedItems.forEach((item) => {
+      dispatch(cancelCommand({ id: item.id }));
+    });
+  }, [closeCancelAllModal, dispatch, queuedItems]);
+
   useEffect(() => {
     dispatch(fetchCommands());
   }, [dispatch]);
@@ -61,14 +92,37 @@ export default function QueuedTasks() {
       {isFetching && !isPopulated && <LoadingIndicator />}
 
       {isPopulated && (
-        <Table columns={columns}>
-          <TableBody>
-            {items.map((item) => {
-              return <QueuedTaskRow key={item.id} {...item} />;
-            })}
-          </TableBody>
-        </Table>
+        <>
+          <div>
+            <Button
+              kind={kinds.DANGER}
+              isDisabled={queuedItems.length === 0}
+              onPress={handleCancelAllPress}
+            >
+              {translate('CancelAll')}
+            </Button>
+          </div>
+
+          <Table columns={columns}>
+            <TableBody>
+              {items.map((item) => {
+                return <QueuedTaskRow key={item.id} {...item} />;
+              })}
+            </TableBody>
+          </Table>
+        </>
       )}
+
+      <ConfirmModal
+        isOpen={isCancelAllModalOpen}
+        kind={kinds.DANGER}
+        title={translate('CancelAll')}
+        message={translate('CancelAllQueuedTasksMessage')}
+        confirmLabel={translate('YesCancel')}
+        cancelLabel={translate('NoLeaveIt')}
+        onConfirm={handleCancelAllConfirm}
+        onCancel={closeCancelAllModal}
+      />
     </FieldSet>
   );
 }
