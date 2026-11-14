@@ -47,6 +47,8 @@ namespace NzbDrone.Core.Test.IndexerTests.ExtToTests
 
             releases.Should().HaveCount(2);
             releases.Should().AllBeOfType<TorrentInfo>();
+            releases.Should().OnlyContain(r => r.DownloadUrl.StartsWith("https://"));
+            releases.Should().NotContain(r => r.DownloadUrl.StartsWith("extto:"));
 
             var first = (TorrentInfo)releases.First();
 
@@ -56,6 +58,7 @@ namespace NzbDrone.Core.Test.IndexerTests.ExtToTests
             first.Peers.Should().Be(12);
             first.InfoUrl.Should().Be("https://ext.to/dexter-resurrection-s02e01-e03-hd720p-webrip-rus-23729733/");
             first.Guid.Should().Be("https://ext.to/dexter-resurrection-s02e01-e03-hd720p-webrip-rus-23729733/");
+            first.DownloadUrl.Should().Be(first.InfoUrl);
             first.Categories.Should().Contain(c => c.Id == NewznabStandardCategory.TVHD.Id);
             first.PublishDate.Year.Should().Be(2026);
             first.PublishDate.Month.Should().Be(11);
@@ -67,6 +70,7 @@ namespace NzbDrone.Core.Test.IndexerTests.ExtToTests
             second.Seeders.Should().Be(42);
             second.Peers.Should().Be(45);
             second.Categories.Should().Contain(c => c.Id == NewznabStandardCategory.PC.Id);
+            second.DownloadUrl.Should().Be(second.InfoUrl);
         }
 
         [Test]
@@ -90,14 +94,56 @@ namespace NzbDrone.Core.Test.IndexerTests.ExtToTests
             var releases = (await Subject.Fetch(new BasicSearchCriteria { Categories = Array.Empty<int>() })).Releases;
 
             releases.Should().HaveCount(1);
+            releases.Should().OnlyContain(r => r.DownloadUrl.StartsWith("https://"));
+            releases.Should().NotContain(r => r.DownloadUrl.StartsWith("extto:"));
             var first = (TorrentInfo)releases.First();
             first.Title.Should().Be("Dexter.Resurrection.S02E01-E03.HD720p.WEBRip.Rus");
+            first.DownloadUrl.Should().Be(first.InfoUrl);
             first.MagnetUrl.Should().BeNullOrEmpty();
 
             Mocker.GetMock<IIndexerHttpClient>()
                 .Verify(o => o.ExecuteProxiedAsync(It.Is<HttpRequest>(v => v.Method == HttpMethod.Post), Subject.Definition), Times.Never());
 
             ExceptionVerification.ExpectedWarns(1);
+        }
+
+        [Test]
+        public void should_map_anime_category_and_capabilities()
+        {
+            Subject.Capabilities.Categories.MapTorznabCapsToTrackers(new[] { NewznabStandardCategory.TVAnime.Id })
+                .Should().Contain("7");
+
+            var animeHtml = @"<!DOCTYPE html><html><head><meta name=""csrf-token"" content=""abc""></head><body>
+<table class=""table table-striped table-hover search-table""><tbody>
+<tr>
+  <td class=""text-left"">
+    <div class=""float-left has-movie"">
+      <div class=""torrent-title-line""><a href=""/some-anime-23729733/"" class=""torrent-title-link""><b>Some Anime</b></a></div>
+      <div class=""related-posted"">Posted in <a href=""/anime/""><strong>Anime</strong></a></div>
+    </div>
+    <div class=""btn-blocks float-right""><a class=""dwn-btn search-magnet-btn"" href=""javascript:void(0);"" data-id=""23729733""></a></div>
+  </td>
+  <td class=""nowrap-td hide-on-mob""><div class=""add-block-wrapper""><span class=""add-block"">Size</span><span>1.5 GB</span></div></td>
+  <td class=""hide-on-mob""><div class=""add-block-wrapper""><span class=""add-block"">Files</span><span>1</span></div></td>
+  <td class=""nowrap-td hide-on-mob""><div class=""add-block-wrapper""><span class=""add-block"">Age</span><span title=""14 November 2026"">1 hour ago</span></div></td>
+  <td class=""hide-on-mob""><div class=""add-block-wrapper""><span class=""add-block"">Seeds</span><span class=""text-success"">1</span></div></td>
+  <td class=""hide-on-mob""><div class=""add-block-wrapper""><span class=""add-block"">Leechs</span><span class=""text-danger"">0</span></div></td>
+  <td class=""hide-on-mob""></td>
+</tr>
+</tbody></table>
+<script>window.searchPageToken = 'd42abb6508298558d8a42fab2048df33';</script>
+</body></html>";
+
+            Mocker.GetMock<IIndexerHttpClient>()
+                .Setup(o => o.ExecuteProxiedAsync(It.IsAny<HttpRequest>(), Subject.Definition))
+                .ReturnsAsync((HttpRequest r, IndexerDefinition _) => new HttpResponse(r, new HttpHeader(), new CookieCollection(), animeHtml));
+
+            var releases = Subject.Fetch(new BasicSearchCriteria { Categories = Array.Empty<int>() }).GetAwaiter().GetResult().Releases;
+
+            releases.Should().HaveCount(1);
+            releases.Should().OnlyContain(r => r.DownloadUrl.StartsWith("https://"));
+            releases.Should().NotContain(r => r.DownloadUrl.StartsWith("extto:"));
+            releases.First().Categories.Should().Contain(c => c.Id == NewznabStandardCategory.TVAnime.Id);
         }
     }
 }

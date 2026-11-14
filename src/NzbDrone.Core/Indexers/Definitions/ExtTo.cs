@@ -56,7 +56,7 @@ namespace NzbDrone.Core.Indexers.Definitions
 
         public override IParseIndexerResponse GetParser()
         {
-            return new ExtToParser(Settings, Capabilities.Categories);
+            return new ExtToParser(Settings, Capabilities.Categories, _logger);
         }
 
         protected override async Task<IndexerQueryResult> FetchPage(IndexerRequest request, IParseIndexerResponse parser)
@@ -153,11 +153,6 @@ namespace NzbDrone.Core.Indexers.Definitions
 
         private static string GetTorrentId(ReleaseInfo release)
         {
-            if (release.DownloadUrl != null && release.DownloadUrl.StartsWith("extto:", StringComparison.Ordinal))
-            {
-                return release.DownloadUrl.Substring("extto:".Length);
-            }
-
             var match = TorrentIdRegex.Match(release.InfoUrl ?? string.Empty);
             return match.Success ? match.Groups[1].Value : null;
         }
@@ -245,9 +240,10 @@ namespace NzbDrone.Core.Indexers.Definitions
             caps.Categories.AddCategoryMapping(4, NewznabStandardCategory.Console, "Games");
             caps.Categories.AddCategoryMapping(5, NewznabStandardCategory.PC, "Apps");
             caps.Categories.AddCategoryMapping(6, NewznabStandardCategory.Books, "Books");
-            caps.Categories.AddCategoryMapping(7, NewznabStandardCategory.XXX, "XXX");
+            caps.Categories.AddCategoryMapping(7, NewznabStandardCategory.TVAnime, "Anime");
             caps.Categories.AddCategoryMapping(8, NewznabStandardCategory.Other, "Other");
 
+            // Site adult content is behind with_adult=1; its category number is not established, so do not guess a mapping.
             return caps;
         }
 
@@ -311,7 +307,8 @@ namespace NzbDrone.Core.Indexers.Definitions
             var cats = _capabilities.Categories.MapTorznabCapsToTrackers(searchCriteria.Categories);
             var cat = cats?.FirstOrDefault();
 
-            for (var page = 1; page <= 10; page++)
+            // Cap at 2 pages: each page can trigger ~50 magnet POSTs after a FlareSolverr solve, so 10 pages is excessive for typical searches.
+            for (var page = 1; page <= 2; page++)
             {
                 var qc = new NameValueCollection
                 {
@@ -344,11 +341,13 @@ namespace NzbDrone.Core.Indexers.Definitions
     {
         private readonly ExtToSettings _settings;
         private readonly IndexerCapabilitiesCategories _categories;
+        private readonly Logger _logger;
 
-        public ExtToParser(ExtToSettings settings, IndexerCapabilitiesCategories categories)
+        public ExtToParser(ExtToSettings settings, IndexerCapabilitiesCategories categories, Logger logger)
         {
             _settings = settings;
             _categories = categories;
+            _logger = logger;
         }
 
         public IList<ReleaseInfo> ParseResponse(IndexerResponse indexerResponse)
@@ -424,7 +423,7 @@ namespace NzbDrone.Core.Indexers.Definitions
                     {
                         Guid = infoUrl,
                         InfoUrl = infoUrl,
-                        DownloadUrl = torrentId.IsNotNullOrWhiteSpace() ? $"extto:{torrentId}" : infoUrl,
+                        DownloadUrl = infoUrl,
                         Title = title,
                         Size = size,
                         Seeders = seeders,
@@ -437,8 +436,9 @@ namespace NzbDrone.Core.Indexers.Definitions
 
                     releaseInfos.Add(release);
                 }
-                catch
+                catch (Exception ex)
                 {
+                    _logger.Debug(ex, "Failed to parse Ext.to row: {0}", row.QuerySelector("a.torrent-title-link")?.TextContent?.Trim() ?? row.OuterHtml?.Substring(0, Math.Min(80, row.OuterHtml?.Length ?? 0)));
                 }
             }
 
