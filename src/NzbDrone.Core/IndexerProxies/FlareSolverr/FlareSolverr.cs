@@ -88,11 +88,41 @@ namespace NzbDrone.Core.IndexerProxies.FlareSolverr
 
             InjectCookies(newRequest, result);
 
+            var outgoingHeaders = newRequest.Headers.AllKeys?.Select(key =>
+            {
+                var value = newRequest.Headers[key] ?? string.Empty;
+                if (key.Equals("Cookie", StringComparison.OrdinalIgnoreCase) || key.Equals("Set-Cookie", StringComparison.OrdinalIgnoreCase))
+                {
+                    value = "<redacted>";
+                }
+
+                if (value.Length > 120)
+                {
+                    value = value.Substring(0, 120) + "...";
+                }
+
+                return $"{key}: {value}";
+            }).ToArray() ?? Array.Empty<string>();
+
+            var outgoingCookieNames = newRequest.Cookies?.Keys.ToArray() ?? Array.Empty<string>();
+            _logger.Debug("FlareSolverr PostResponse: retry outgoing request method={0}, url={1}, cookieNames=[{2}], headers=[{3}]", newRequest.Method, newRequest.Url, string.Join(", ", outgoingCookieNames), string.Join(" | ", outgoingHeaders));
+
             //Request again with User-Agent and Cookies from Flaresolverr
             var finalResponse = _httpClient.Execute(newRequest);
 
             var finalIsCloudflareProtected = CloudFlareDetectionService.IsCloudflareProtected(finalResponse);
-            _logger.Debug("FlareSolverr PostResponse: retry status={0}, still Cloudflare-protected={1} for {2}", (int)finalResponse.StatusCode, finalIsCloudflareProtected, response.Request.Url.Host);
+            var retryServer = finalResponse.Headers.GetSingleValue("Server") ?? string.Empty;
+            var retryCfMitigated = finalResponse.Headers.GetSingleValue("cf-mitigated") ?? string.Empty;
+            var retryCfRay = finalResponse.Headers.GetSingleValue("cf-ray") ?? string.Empty;
+            var retryContentType = finalResponse.Headers.GetSingleValue("Content-Type") ?? string.Empty;
+            var retryContentLength = finalResponse.Headers.GetSingleValue("Content-Length") ?? string.Empty;
+            var retryBodyPrefix = finalResponse.Content ?? string.Empty;
+            if (retryBodyPrefix.Length > 160)
+            {
+                retryBodyPrefix = retryBodyPrefix.Substring(0, 160);
+            }
+
+            _logger.Debug("FlareSolverr PostResponse: retry status={0}, still Cloudflare-protected={1}, server='{2}', cf-mitigated='{3}', cf-ray='{4}', content-type='{5}', content-length='{6}', body-prefix='{7}' for {8}", (int)finalResponse.StatusCode, finalIsCloudflareProtected, retryServer, retryCfMitigated, retryCfRay, retryContentType, retryContentLength, retryBodyPrefix, response.Request.Url.Host);
 
             return finalResponse;
         }
