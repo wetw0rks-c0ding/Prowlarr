@@ -520,6 +520,14 @@ namespace Prowlarr.Http.Authentication
                 return true;
             }
 
+            // When role mappings are configured, group authorization is authoritative.
+            // Do not fall back to the legacy OidcUserIdentifier allowlist.
+            if (!string.IsNullOrWhiteSpace(configFileProvider.OidcRoleMappings))
+            {
+                Logger.Error("User is not authorized: no mapped group and role mappings are configured");
+                return false;
+            }
+
             var configuredUser = configFileProvider.OidcUserIdentifier;
 
             if (configuredUser.IsNullOrWhiteSpace())
