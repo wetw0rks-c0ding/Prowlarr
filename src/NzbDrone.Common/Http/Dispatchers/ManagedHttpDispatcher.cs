@@ -52,7 +52,17 @@ namespace NzbDrone.Common.Http.Dispatchers
                 Version = HttpVersion.Version20,
                 VersionPolicy = HttpVersionPolicy.RequestVersionOrLower
             };
-            requestMessage.Headers.UserAgent.ParseAdd(_userAgentBuilder.GetUserAgent(request.UseSimplifiedUserAgent));
+
+            var requestUserAgent = request.Headers?.UserAgent;
+            if (requestUserAgent.IsNotNullOrWhiteSpace())
+            {
+                requestMessage.Headers.UserAgent.ParseAdd(requestUserAgent);
+            }
+            else
+            {
+                requestMessage.Headers.UserAgent.ParseAdd(_userAgentBuilder.GetUserAgent(request.UseSimplifiedUserAgent));
+            }
+
             requestMessage.Headers.ConnectionClose = !request.ConnectionKeepAlive;
 
             var cookieHeader = cookies.GetCookieHeader((Uri)request.Url);
@@ -208,8 +218,19 @@ namespace NzbDrone.Common.Http.Dispatchers
 
         protected virtual void AddRequestHeaders(HttpRequestMessage webRequest, HttpHeader headers)
         {
+            if (headers.UserAgent.IsNotNullOrWhiteSpace())
+            {
+                webRequest.Headers.UserAgent.Clear();
+                webRequest.Headers.UserAgent.ParseAdd(headers.UserAgent);
+            }
+
             foreach (var header in headers)
             {
+                if (header.Key.Equals("User-Agent", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
                 switch (header.Key)
                 {
                     case "Accept":
@@ -245,10 +266,6 @@ namespace NzbDrone.Common.Http.Dispatchers
                         break;
                     case "Transfer-Encoding":
                         webRequest.Headers.TransferEncoding.ParseAdd(header.Value);
-                        break;
-                    case "User-Agent":
-                        webRequest.Headers.UserAgent.Clear();
-                        webRequest.Headers.UserAgent.ParseAdd(header.Value);
                         break;
                     case "Proxy-Connection":
                         throw new NotImplementedException();

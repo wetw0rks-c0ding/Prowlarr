@@ -38,9 +38,17 @@ namespace NzbDrone.Core.IndexerProxies.FlareSolverr
             request.SuppressHttpError = true;
 
             //Inject UA if not present
-            if (_cache.Find(request.Url.Host).IsNotNullOrWhiteSpace() && request.Headers.UserAgent.IsNullOrWhiteSpace())
+            var cachedUserAgent = _cache.Find(request.Url.Host);
+
+            if (cachedUserAgent.IsNotNullOrWhiteSpace() && request.Headers.UserAgent.IsNullOrWhiteSpace())
             {
-                request.Headers.UserAgent = _cache.Find(request.Url.Host);
+                request.Headers.UserAgent = cachedUserAgent;
+                _logger.Debug("FlareSolverr PreRequest: injected cached UA for {0} (prefix='{1}', length={2})", request.Url.Host, cachedUserAgent.Substring(0, Math.Min(40, cachedUserAgent.Length)), cachedUserAgent.Length);
+            }
+            else if (request.Headers.UserAgent.IsNotNullOrWhiteSpace())
+            {
+                var existingUserAgent = request.Headers.UserAgent;
+                _logger.Debug("FlareSolverr PreRequest: not injecting cached UA for {0} because request.Headers.UserAgent already set (prefix='{1}', length={2})", request.Url.Host, existingUserAgent.Substring(0, Math.Min(40, existingUserAgent.Length)), existingUserAgent.Length);
             }
 
             return request;
@@ -74,10 +82,17 @@ namespace NzbDrone.Core.IndexerProxies.FlareSolverr
             _cache.Set(response.Request.Url.Host, result.Solution.UserAgent);
             newRequest.Headers.UserAgent = result.Solution.UserAgent;
 
+            var flaresolverrUserAgent = result.Solution.UserAgent ?? string.Empty;
+            var cookieNames = result.Solution.Cookies?.Select(c => c.Name).ToArray() ?? Array.Empty<string>();
+            _logger.Debug("FlareSolverr PostResponse: FlareSolverr UA (prefix='{0}', length={1}), injecting cookies [{2}] for {3}", flaresolverrUserAgent.Substring(0, Math.Min(40, flaresolverrUserAgent.Length)), flaresolverrUserAgent.Length, string.Join(", ", cookieNames), response.Request.Url.Host);
+
             InjectCookies(newRequest, result);
 
             //Request again with User-Agent and Cookies from Flaresolverr
             var finalResponse = _httpClient.Execute(newRequest);
+
+            var finalIsCloudflareProtected = CloudFlareDetectionService.IsCloudflareProtected(finalResponse);
+            _logger.Debug("FlareSolverr PostResponse: retry status={0}, still Cloudflare-protected={1} for {2}", (int)finalResponse.StatusCode, finalIsCloudflareProtected, response.Request.Url.Host);
 
             return finalResponse;
         }
