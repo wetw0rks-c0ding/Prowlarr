@@ -258,8 +258,6 @@ namespace NzbDrone.Core.Indexers.Definitions
                 .SetHeader("Referer", searchRequest.Url.FullUri)
                 .Accept(HttpAccept.Json);
 
-            requestBuilder.SetCookies(cookies);
-
             var request = requestBuilder.Build();
             request.RequestTimeout = TimeSpan.FromSeconds(30);
             request.AllowAutoRedirect = true;
@@ -267,14 +265,30 @@ namespace NzbDrone.Core.Indexers.Definitions
             request.SetContent($"torrent_id={Uri.EscapeDataString(torrentId)}&hash=&name=&timestamp={timestamp}&hmac={Uri.EscapeDataString(hmac)}&sessid={Uri.EscapeDataString(csrf)}");
             request.Headers.ContentType = "application/x-www-form-urlencoded";
 
+            var cookieHeader = cookies != null && cookies.Count > 0
+                ? string.Join("; ", cookies.Select(kv => kv.Key + "=" + kv.Value))
+                : string.Empty;
+
+            if (cookieHeader.IsNotNullOrWhiteSpace())
+            {
+                request.Headers.Set("Cookie", cookieHeader);
+            }
+
+            request.Cookies.Clear();
+
             if (userAgent.IsNotNullOrWhiteSpace())
             {
                 request.Headers.UserAgent = userAgent;
             }
 
+            _logger.Debug("{0}: magnet POST cookieCount={1}, cookieHeaderLength={2}, uaLength={3}", Definition.Name, cookies?.Count ?? 0, cookieHeader.Length, request.Headers.UserAgent?.Length ?? 0);
+
             var response = await _httpClient.ExecuteProxiedAsync(request, Definition);
 
-            if (response.StatusCode != HttpStatusCode.OK || response.Content.IsNullOrWhiteSpace())
+            var responseContent = response.Content ?? string.Empty;
+            _logger.Debug("{0}: magnet POST status={1}, successBody={2}", Definition.Name, (int)response.StatusCode, responseContent.StartsWith("{\"success\":true", StringComparison.Ordinal));
+
+            if (response.StatusCode != HttpStatusCode.OK || responseContent.IsNullOrWhiteSpace())
             {
                 return null;
             }

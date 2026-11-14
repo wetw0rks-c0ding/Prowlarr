@@ -161,8 +161,9 @@ namespace NzbDrone.Core.Test.IndexerTests.ExtToTests
                         It.Is<HttpRequest>(v =>
                             v.Method == HttpMethod.Post &&
                             v.Headers.UserAgent == "FlareSolverr-UA/1.0" &&
-                            v.Cookies["cf_clearance"] == "abc123" &&
-                            v.Cookies["__cf_bm"] == "bm456"),
+                            v.Headers.Get("Cookie").Contains("cf_clearance=abc123") &&
+                            v.Headers.Get("Cookie").Contains("__cf_bm=bm456") &&
+                            v.Cookies.Count == 0),
                         Subject.Definition),
                     Times.AtLeastOnce());
         }
