@@ -128,7 +128,7 @@ namespace NzbDrone.Core.Test.IndexerTests.ExtToTests
   ""solution"": {{
     ""url"": ""https://ext.to/ajax/getSearchMagnet.php"",
     ""status"": 200,
-    ""response"": {System.Text.Json.JsonSerializer.Serialize(magnet)}
+    ""response"": {System.Text.Json.JsonSerializer.Serialize($"<html><head></head><body><pre>{magnet}</pre></body></html>")}
   }}
 }}";
             var destroyResponse = @"{""status"":""ok""}";

@@ -325,6 +325,14 @@ namespace NzbDrone.Core.Indexers.Definitions
 
             try
             {
+                // FlareSolverr wraps JSON responses from the magnet endpoint in an
+                // HTML <pre>...</pre> preview; unwrap it before deserialising.
+                var preMatch = Regex.Match(body, @"<pre[^>]*>(.*?)</pre>", RegexOptions.Singleline | RegexOptions.IgnoreCase);
+                if (preMatch.Success)
+                {
+                    body = System.Net.WebUtility.HtmlDecode(preMatch.Groups[1].Value).Trim();
+                }
+
                 if (body.StartsWith("\"", StringComparison.Ordinal))
                 {
                     body = System.Text.Json.JsonSerializer.Deserialize<string>(result.Solution.Response);
