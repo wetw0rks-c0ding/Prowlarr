@@ -62,53 +62,65 @@ namespace NzbDrone.Core.Indexers.Definitions
         protected override async Task<IndexerQueryResult> FetchPage(IndexerRequest request, IParseIndexerResponse parser)
         {
             IndexerResponse response;
-            string flaresolverrUserAgent = null;
-            Dictionary<string, string> flaresolverrCookies = null;
+            string flaresolverrSession = null;
 
             if (Settings.FlareSolverrUrl.IsNotNullOrWhiteSpace())
             {
-                var solution = await FetchPageViaFlareSolverr(request);
+                flaresolverrSession = await CreateFlareSolverrSession();
 
-                if (solution == null)
+                if (flaresolverrSession.IsNullOrWhiteSpace())
                 {
-                    _logger.Warn("{0}: Ext.to is Cloudflare-protected; configure the FlareSolverr URL in the indexer settings", Definition.Name);
-
-                    return new IndexerQueryResult
-                    {
-                        Releases = new List<ReleaseInfo>(),
-                        Response = new HttpResponse(request.HttpRequest, new HttpHeader(), new CookieCollection(), string.Empty)
-                    };
+                    _logger.Warn("{0}: FlareSolverr sessions.create failed or returned no session; falling back to stateless behaviour", Definition.Name);
                 }
-
-                var httpResponse = new HttpResponse(request.HttpRequest, new HttpHeader(), new CookieCollection(), solution.Response ?? string.Empty);
-                response = new IndexerResponse(request, httpResponse);
-                flaresolverrUserAgent = solution.UserAgent;
-                flaresolverrCookies = solution.Cookies?
-                    .Where(c => c.Name.IsNotNullOrWhiteSpace())
-                    .GroupBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
-                    .ToDictionary(g => g.Key, g => g.Last().Value ?? string.Empty, StringComparer.OrdinalIgnoreCase);
             }
-            else
-            {
-                response = await FetchIndexerResponse(request);
-            }
-
-            var releases = new List<ReleaseInfo>();
 
             try
             {
-                releases = parser.ParseResponse(response).ToList();
-            }
-            catch (Exception ex)
-            {
-                ex.WithData(response.HttpResponse, 128 * 1024);
-                _logger.Trace("Unexpected Response content ({0} bytes): {1}", response.HttpResponse.ResponseData.Length, response.HttpResponse.Content);
-                throw;
-            }
+                if (Settings.FlareSolverrUrl.IsNotNullOrWhiteSpace())
+                {
+                    response = await FetchPageViaFlareSolverr(request, flaresolverrSession);
 
-            if (releases.Count == 0)
-            {
-                _logger.Trace("No releases found. Response: {0}", response.Content);
+                    if (response == null)
+                    {
+                        _logger.Warn("{0}: Ext.to is Cloudflare-protected; configure the FlareSolverr URL in the indexer settings", Definition.Name);
+
+                        return new IndexerQueryResult
+                        {
+                            Releases = new List<ReleaseInfo>(),
+                            Response = new HttpResponse(request.HttpRequest, new HttpHeader(), new CookieCollection(), string.Empty)
+                        };
+                    }
+                }
+                else
+                {
+                    response = await FetchIndexerResponse(request);
+                }
+
+                var releases = new List<ReleaseInfo>();
+
+                try
+                {
+                    releases = parser.ParseResponse(response).ToList();
+                }
+                catch (Exception ex)
+                {
+                    ex.WithData(response.HttpResponse, 128 * 1024);
+                    _logger.Trace("Unexpected Response content ({0} bytes): {1}", response.HttpResponse.ResponseData.Length, response.HttpResponse.Content);
+                    throw;
+                }
+
+                if (releases.Count == 0)
+                {
+                    _logger.Trace("No releases found. Response: {0}", response.Content);
+
+                    return new IndexerQueryResult
+                    {
+                        Releases = releases,
+                        Response = response.HttpResponse
+                    };
+                }
+
+                await EnrichMagnets(request, response, releases, flaresolverrSession);
 
                 return new IndexerQueryResult
                 {
@@ -116,46 +128,94 @@ namespace NzbDrone.Core.Indexers.Definitions
                     Response = response.HttpResponse
                 };
             }
-
-            await EnrichMagnets(request, response, releases, flaresolverrCookies, flaresolverrUserAgent);
-
-            return new IndexerQueryResult
+            finally
             {
-                Releases = releases,
-                Response = response.HttpResponse
-            };
+                if (flaresolverrSession.IsNotNullOrWhiteSpace())
+                {
+                    await DestroyFlareSolverrSession(flaresolverrSession);
+                }
+            }
         }
 
-        private async Task<ExtToFlareSolverrSolution> FetchPageViaFlareSolverr(IndexerRequest request)
+        private string GetFlareSolverrApiUrl()
+        {
+            return Settings.FlareSolverrUrl.TrimEnd('/') + "/v1";
+        }
+
+        private async Task<ExtToFlareSolverrResponse> SendFlareSolverrRequestAsync(object payload)
+        {
+            var httpRequest = new HttpRequestBuilder(GetFlareSolverrApiUrl())
+                .Post()
+                .Accept(HttpAccept.Json)
+                .Build();
+
+            httpRequest.RequestTimeout = TimeSpan.FromSeconds(130);
+            httpRequest.Headers.ContentType = "application/json";
+            httpRequest.SetContent(STJson.ToJson(payload));
+
+            var httpResponse = await _httpClient.ExecuteAsync(httpRequest);
+
+            if (httpResponse.StatusCode != HttpStatusCode.OK || httpResponse.Content.IsNullOrWhiteSpace())
+            {
+                _logger.Debug("{0}: FlareSolverr request returned status {1}", Definition.Name, httpResponse.StatusCode);
+                return null;
+            }
+
+            try
+            {
+                return STJson.Deserialize<ExtToFlareSolverrResponse>(httpResponse.Content);
+            }
+            catch (Exception ex)
+            {
+                _logger.Debug(ex, "{0}: failed to deserialize FlareSolverr response", Definition.Name);
+                return null;
+            }
+        }
+
+        private async Task<string> CreateFlareSolverrSession()
         {
             try
             {
-                var flareSolverrUrl = Settings.FlareSolverrUrl.TrimEnd('/') + "/v1";
-                var payload = new
+                var result = await SendFlareSolverrRequestAsync(new { cmd = "sessions.create" });
+
+                if (result?.Session.IsNotNullOrWhiteSpace() == true)
                 {
-                    cmd = "request.get",
-                    url = request.Url.FullUri,
-                    maxTimeout = 120000
-                };
-
-                var httpRequest = new HttpRequestBuilder(flareSolverrUrl)
-                    .Post()
-                    .Accept(HttpAccept.Json)
-                    .Build();
-
-                httpRequest.RequestTimeout = TimeSpan.FromSeconds(130);
-                httpRequest.Headers.ContentType = "application/json";
-                httpRequest.SetContent(STJson.ToJson(payload));
-
-                var httpResponse = await _httpClient.ExecuteAsync(httpRequest);
-
-                if (httpResponse.StatusCode != HttpStatusCode.OK || httpResponse.Content.IsNullOrWhiteSpace())
-                {
-                    _logger.Warn("{0}: FlareSolverr request failed with status {1}", Definition.Name, httpResponse.StatusCode);
-                    return null;
+                    _logger.Debug("{0}: FlareSolverr session created: {1}", Definition.Name, result.Session);
+                    return result.Session;
                 }
 
-                var result = STJson.Deserialize<ExtToFlareSolverrResponse>(httpResponse.ResponseData);
+                _logger.Warn("{0}: FlareSolverr sessions.create returned no session", Definition.Name);
+                return null;
+            }
+            catch (Exception ex)
+            {
+                _logger.Warn(ex, "{0}: FlareSolverr sessions.create failed", Definition.Name);
+                return null;
+            }
+        }
+
+        private async Task DestroyFlareSolverrSession(string session)
+        {
+            try
+            {
+                await SendFlareSolverrRequestAsync(new { cmd = "sessions.destroy", session });
+                _logger.Debug("{0}: FlareSolverr session destroyed: {1}", Definition.Name, session);
+            }
+            catch (Exception ex)
+            {
+                _logger.Warn(ex, "{0}: FlareSolverr sessions.destroy failed for {1}", Definition.Name, session);
+            }
+        }
+
+        private async Task<IndexerResponse> FetchPageViaFlareSolverr(IndexerRequest request, string session)
+        {
+            try
+            {
+                object payload = session.IsNotNullOrWhiteSpace()
+                    ? new { cmd = "request.get", url = request.Url.FullUri, maxTimeout = 120000, session }
+                    : new { cmd = "request.get", url = request.Url.FullUri, maxTimeout = 120000 };
+
+                var result = await SendFlareSolverrRequestAsync(payload);
 
                 if (result?.Solution == null || result.Solution.Response.IsNullOrWhiteSpace())
                 {
@@ -163,7 +223,8 @@ namespace NzbDrone.Core.Indexers.Definitions
                     return null;
                 }
 
-                return result.Solution;
+                var httpResponse = new HttpResponse(request.HttpRequest, new HttpHeader(), new CookieCollection(), result.Solution.Response ?? string.Empty);
+                return new IndexerResponse(request, httpResponse);
             }
             catch (Exception ex)
             {
@@ -172,7 +233,7 @@ namespace NzbDrone.Core.Indexers.Definitions
             }
         }
 
-        private async Task EnrichMagnets(IndexerRequest request, IndexerResponse response, List<ReleaseInfo> releases, IDictionary<string, string> flaresolverrCookies = null, string flaresolverrUserAgent = null)
+        private async Task EnrichMagnets(IndexerRequest request, IndexerResponse response, List<ReleaseInfo> releases, string flaresolverrSession)
         {
             var content = response.Content ?? string.Empty;
             var csrfMatch = CsrfTokenRegex.Match(content);
@@ -186,34 +247,7 @@ namespace NzbDrone.Core.Indexers.Definitions
 
             var csrf = csrfMatch.Groups[1].Value;
             var searchPageToken = tokenMatch.Groups[1].Value;
-
-            var cookies = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-            if (flaresolverrCookies != null)
-            {
-                foreach (var kv in flaresolverrCookies)
-                {
-                    cookies[kv.Key] = kv.Value;
-                }
-            }
-            else
-            {
-                foreach (Cookie cookie in response.HttpResponse.Cookies)
-                {
-                    cookies[cookie.Name] = cookie.Value;
-                }
-
-                if (request.HttpRequest.Cookies != null)
-                {
-                    foreach (var kv in request.HttpRequest.Cookies)
-                    {
-                        if (!cookies.ContainsKey(kv.Key))
-                        {
-                            cookies[kv.Key] = kv.Value;
-                        }
-                    }
-                }
-            }
+            var consecutiveFailures = 0;
 
             foreach (var release in releases.OfType<TorrentInfo>())
             {
@@ -225,15 +259,36 @@ namespace NzbDrone.Core.Indexers.Definitions
 
                 try
                 {
-                    var magnet = await FetchMagnet(request, cookies, csrf, searchPageToken, torrentId, flaresolverrUserAgent);
+                    var magnet = flaresolverrSession.IsNotNullOrWhiteSpace()
+                        ? await FetchMagnetViaFlareSolverrSession(flaresolverrSession, csrf, searchPageToken, torrentId)
+                        : await FetchMagnetStateless(request, response, csrf, searchPageToken, torrentId);
+
                     if (magnet.IsNotNullOrWhiteSpace())
                     {
                         release.MagnetUrl = magnet;
+                        consecutiveFailures = 0;
+                    }
+                    else
+                    {
+                        consecutiveFailures++;
+
+                        if (consecutiveFailures >= 3)
+                        {
+                            _logger.Warn("{0}: stopping magnet enrichment after 3 consecutive failures", Definition.Name);
+                            break;
+                        }
                     }
                 }
                 catch (Exception ex)
                 {
+                    consecutiveFailures++;
                     _logger.Debug(ex, "{0}: failed to fetch magnet for torrent {1}", Definition.Name, torrentId);
+
+                    if (consecutiveFailures >= 3)
+                    {
+                        _logger.Warn("{0}: stopping magnet enrichment after 3 consecutive failures", Definition.Name);
+                        break;
+                    }
                 }
             }
         }
@@ -244,8 +299,75 @@ namespace NzbDrone.Core.Indexers.Definitions
             return match.Success ? match.Groups[1].Value : null;
         }
 
-        private async Task<string> FetchMagnet(IndexerRequest searchRequest, IDictionary<string, string> cookies, string csrf, string searchPageToken, string torrentId, string userAgent = null)
+        private async Task<string> FetchMagnetViaFlareSolverrSession(string session, string csrf, string searchPageToken, string torrentId)
         {
+            var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            var hmac = ComputeHmac(torrentId, timestamp, searchPageToken);
+            var postData = $"torrent_id={Uri.EscapeDataString(torrentId)}&hash=&name=&timestamp={timestamp}&hmac={Uri.EscapeDataString(hmac)}&sessid={Uri.EscapeDataString(csrf)}";
+
+            var result = await SendFlareSolverrRequestAsync(new
+            {
+                cmd = "request.post",
+                url = Settings.BaseUrl.TrimEnd('/') + "/ajax/getSearchMagnet.php",
+                session,
+                postData,
+                maxTimeout = 120000
+            });
+
+            if (result?.Solution == null || result.Solution.Response.IsNullOrWhiteSpace())
+            {
+                _logger.Debug("{0}: FlareSolverr magnet request returned no solution for torrent {1}", Definition.Name, torrentId);
+                return null;
+            }
+
+            var body = result.Solution.Response.Trim();
+            ExtToMagnetResponse json = null;
+
+            try
+            {
+                if (body.StartsWith("\"", StringComparison.Ordinal))
+                {
+                    body = System.Text.Json.JsonSerializer.Deserialize<string>(result.Solution.Response);
+                }
+
+                json = STJson.Deserialize<ExtToMagnetResponse>(body);
+            }
+            catch (Exception ex)
+            {
+                _logger.Debug(ex, "{0}: failed to parse FlareSolverr magnet response for torrent {1}", Definition.Name, torrentId);
+                return null;
+            }
+
+            if (json != null && json.Success && json.Url.IsNotNullOrWhiteSpace())
+            {
+                _logger.Debug("{0}: FlareSolverr magnet request succeeded for torrent {1}", Definition.Name, torrentId);
+                return json.Url;
+            }
+
+            _logger.Debug("{0}: FlareSolverr magnet request unsuccessful for torrent {1}", Definition.Name, torrentId);
+            return null;
+        }
+
+        private async Task<string> FetchMagnetStateless(IndexerRequest searchRequest, IndexerResponse response, string csrf, string searchPageToken, string torrentId)
+        {
+            var cookies = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (Cookie cookie in response.HttpResponse.Cookies)
+            {
+                cookies[cookie.Name] = cookie.Value;
+            }
+
+            if (searchRequest.HttpRequest.Cookies != null)
+            {
+                foreach (var kv in searchRequest.HttpRequest.Cookies)
+                {
+                    if (!cookies.ContainsKey(kv.Key))
+                    {
+                        cookies[kv.Key] = kv.Value;
+                    }
+                }
+            }
+
             var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             var hmac = ComputeHmac(torrentId, timestamp, searchPageToken);
             var baseUrl = Settings.BaseUrl.TrimEnd('/');
@@ -265,7 +387,7 @@ namespace NzbDrone.Core.Indexers.Definitions
             request.SetContent($"torrent_id={Uri.EscapeDataString(torrentId)}&hash=&name=&timestamp={timestamp}&hmac={Uri.EscapeDataString(hmac)}&sessid={Uri.EscapeDataString(csrf)}");
             request.Headers.ContentType = "application/x-www-form-urlencoded";
 
-            var cookieHeader = cookies != null && cookies.Count > 0
+            var cookieHeader = cookies.Count > 0
                 ? string.Join("; ", cookies.Select(kv => kv.Key + "=" + kv.Value))
                 : string.Empty;
 
@@ -276,30 +398,24 @@ namespace NzbDrone.Core.Indexers.Definitions
 
             request.Cookies.Clear();
 
-            if (userAgent.IsNotNullOrWhiteSpace())
-            {
-                request.Headers.UserAgent = userAgent;
-            }
+            _logger.Debug("{0}: stateless magnet POST cookieCount={1}, cookieHeaderLength={2}", Definition.Name, cookies.Count, cookieHeader.Length);
 
-            _logger.Debug("{0}: magnet POST cookieCount={1}, cookieHeaderLength={2}, uaLength={3}", Definition.Name, cookies?.Count ?? 0, cookieHeader.Length, request.Headers.UserAgent?.Length ?? 0);
+            var httpResponse = await _httpClient.ExecuteProxiedAsync(request, Definition);
+            var responseContent = httpResponse.Content ?? string.Empty;
+            _logger.Debug("{0}: stateless magnet POST status={1}, successBody={2}", Definition.Name, (int)httpResponse.StatusCode, responseContent.StartsWith("{\"success\":true", StringComparison.Ordinal));
 
-            var response = await _httpClient.ExecuteProxiedAsync(request, Definition);
-
-            var responseContent = response.Content ?? string.Empty;
-            _logger.Debug("{0}: magnet POST status={1}, successBody={2}", Definition.Name, (int)response.StatusCode, responseContent.StartsWith("{\"success\":true", StringComparison.Ordinal));
-
-            if (response.StatusCode != HttpStatusCode.OK || responseContent.IsNullOrWhiteSpace())
+            if (httpResponse.StatusCode != HttpStatusCode.OK || responseContent.IsNullOrWhiteSpace())
             {
                 return null;
             }
 
-            var json = STJson.Deserialize<ExtToMagnetResponse>(response.ResponseData);
+            var json = STJson.Deserialize<ExtToMagnetResponse>(httpResponse.ResponseData);
             if (json != null && json.Success && json.Url.IsNotNullOrWhiteSpace())
             {
                 return json.Url;
             }
 
-            _logger.Debug("{0}: magnet POST for {1} returned unsuccessful response", Definition.Name, torrentId);
+            _logger.Debug("{0}: stateless magnet POST for {1} returned unsuccessful response", Definition.Name, torrentId);
             return null;
         }
 
@@ -364,6 +480,7 @@ namespace NzbDrone.Core.Indexers.Definitions
         {
             public string Status { get; set; }
             public string Message { get; set; }
+            public string Session { get; set; }
             public ExtToFlareSolverrSolution Solution { get; set; }
         }
 

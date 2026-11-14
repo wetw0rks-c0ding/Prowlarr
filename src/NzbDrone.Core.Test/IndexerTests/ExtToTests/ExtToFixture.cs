@@ -108,40 +108,66 @@ namespace NzbDrone.Core.Test.IndexerTests.ExtToTests
         }
 
         [Test]
-        public async Task should_use_flaresolverr_when_configured_and_apply_solution_cookies_and_user_agent()
+        public async Task should_use_flaresolverr_session_when_configured_and_enrich_magnets()
         {
             var search = ReadAllText(@"Files/Indexers/ExtTo/search.html");
             var magnet = ReadAllText(@"Files/Indexers/ExtTo/magnet.json");
-            var flaresolverrResponse = $@"{{
+            var createSessionResponse = @"{""status"":""ok"",""message"":""Session created"",""session"":""sess-123""}";
+            var pageResponse = $@"{{
   ""status"": ""ok"",
   ""message"": ""Challenge solved"",
   ""solution"": {{
     ""url"": ""https://ext.to/browse/?page=1&q=dexter&sort=age&order=desc"",
     ""status"": 200,
-    ""response"": {System.Text.Json.JsonSerializer.Serialize(search)},
-    ""userAgent"": ""FlareSolverr-UA/1.0"",
-    ""cookies"": [
-      {{ ""name"": ""cf_clearance"", ""value"": ""abc123"" }},
-      {{ ""name"": ""__cf_bm"", ""value"": ""bm456"" }}
-    ]
+    ""response"": {System.Text.Json.JsonSerializer.Serialize(search)}
   }}
 }}";
+            var magnetResponse = $@"{{
+  ""status"": ""ok"",
+  ""message"": ""Challenge solved"",
+  ""solution"": {{
+    ""url"": ""https://ext.to/ajax/getSearchMagnet.php"",
+    ""status"": 200,
+    ""response"": {System.Text.Json.JsonSerializer.Serialize(magnet)}
+  }}
+}}";
+            var destroyResponse = @"{""status"":""ok""}";
 
             ((ExtToSettings)Subject.Definition.Settings).FlareSolverrUrl = "http://localhost:8191/";
 
             Mocker.GetMock<IIndexerHttpClient>()
                 .Setup(o => o.ExecuteAsync(It.Is<HttpRequest>(v => v.Url.FullUri == "http://localhost:8191/v1")))
-                .ReturnsAsync((HttpRequest r) => new HttpResponse(r, new HttpHeader { { "Content-Type", "application/json" } }, new CookieCollection(), flaresolverrResponse));
+                .ReturnsAsync((HttpRequest r) =>
+                {
+                    var content = r.GetContent() ?? string.Empty;
 
-            Mocker.GetMock<IIndexerHttpClient>()
-                .Setup(o => o.ExecuteProxiedAsync(It.Is<HttpRequest>(v => v.Method == HttpMethod.Post), Subject.Definition))
-                .ReturnsAsync((HttpRequest r, IndexerDefinition _) => new HttpResponse(r, new HttpHeader { { "Content-Type", "application/json" } }, new CookieCollection(), magnet));
+                    if (content.Contains("sessions.create"))
+                    {
+                        return new HttpResponse(r, new HttpHeader { { "Content-Type", "application/json" } }, new CookieCollection(), createSessionResponse);
+                    }
+
+                    if (content.Contains("request.get"))
+                    {
+                        return new HttpResponse(r, new HttpHeader { { "Content-Type", "application/json" } }, new CookieCollection(), pageResponse);
+                    }
+
+                    if (content.Contains("request.post"))
+                    {
+                        return new HttpResponse(r, new HttpHeader { { "Content-Type", "application/json" } }, new CookieCollection(), magnetResponse);
+                    }
+
+                    if (content.Contains("sessions.destroy"))
+                    {
+                        return new HttpResponse(r, new HttpHeader { { "Content-Type", "application/json" } }, new CookieCollection(), destroyResponse);
+                    }
+
+                    return new HttpResponse(r, new HttpHeader(), new CookieCollection(), "{}");
+                });
 
             var releases = (await Subject.Fetch(new BasicSearchCriteria { Categories = Array.Empty<int>() })).Releases;
 
             releases.Should().HaveCount(2);
-            var first = (TorrentInfo)releases.First();
-            first.MagnetUrl.Should().Contain("magnet:?xt=urn:btih:");
+            releases.OfType<TorrentInfo>().Should().OnlyContain(r => !string.IsNullOrWhiteSpace(r.MagnetUrl) && r.MagnetUrl.Contains("magnet:?xt=urn:btih:"));
 
             Mocker.GetMock<IIndexerHttpClient>()
                 .Verify(
@@ -150,22 +176,13 @@ namespace NzbDrone.Core.Test.IndexerTests.ExtToTests
 
             Mocker.GetMock<IIndexerHttpClient>()
                 .Verify(
-                    o => o.ExecuteAsync(It.Is<HttpRequest>(v =>
-                        v.Url.FullUri == "http://localhost:8191/v1" &&
-                        v.GetContent().Contains("request.get"))),
+                    o => o.ExecuteAsync(It.Is<HttpRequest>(v => v.GetContent().Contains("sessions.create"))),
                     Times.Once());
 
             Mocker.GetMock<IIndexerHttpClient>()
                 .Verify(
-                    o => o.ExecuteProxiedAsync(
-                        It.Is<HttpRequest>(v =>
-                            v.Method == HttpMethod.Post &&
-                            v.Headers.UserAgent == "FlareSolverr-UA/1.0" &&
-                            v.Headers.Get("Cookie").Contains("cf_clearance=abc123") &&
-                            v.Headers.Get("Cookie").Contains("__cf_bm=bm456") &&
-                            v.Cookies.Count == 0),
-                        Subject.Definition),
-                    Times.AtLeastOnce());
+                    o => o.ExecuteAsync(It.Is<HttpRequest>(v => v.GetContent().Contains("sessions.destroy") && v.GetContent().Contains("sess-123"))),
+                    Times.Once());
         }
 
         [Test]
