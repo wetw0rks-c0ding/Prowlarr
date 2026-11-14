@@ -108,6 +108,66 @@ namespace NzbDrone.Core.Test.IndexerTests.ExtToTests
         }
 
         [Test]
+        public async Task should_use_flaresolverr_when_configured_and_apply_solution_cookies_and_user_agent()
+        {
+            var search = ReadAllText(@"Files/Indexers/ExtTo/search.html");
+            var magnet = ReadAllText(@"Files/Indexers/ExtTo/magnet.json");
+            var flaresolverrResponse = $@"{{
+  ""status"": ""ok"",
+  ""message"": ""Challenge solved"",
+  ""solution"": {{
+    ""url"": ""https://ext.to/browse/?page=1&q=dexter&sort=age&order=desc"",
+    ""status"": 200,
+    ""response"": {System.Text.Json.JsonSerializer.Serialize(search)},
+    ""userAgent"": ""FlareSolverr-UA/1.0"",
+    ""cookies"": [
+      {{ ""name"": ""cf_clearance"", ""value"": ""abc123"" }},
+      {{ ""name"": ""__cf_bm"", ""value"": ""bm456"" }}
+    ]
+  }}
+}}";
+
+            ((ExtToSettings)Subject.Definition.Settings).FlareSolverrUrl = "http://localhost:8191/";
+
+            Mocker.GetMock<IIndexerHttpClient>()
+                .Setup(o => o.ExecuteAsync(It.Is<HttpRequest>(v => v.Url.FullUri == "http://localhost:8191/v1")))
+                .ReturnsAsync((HttpRequest r) => new HttpResponse(r, new HttpHeader { { "Content-Type", "application/json" } }, new CookieCollection(), flaresolverrResponse));
+
+            Mocker.GetMock<IIndexerHttpClient>()
+                .Setup(o => o.ExecuteProxiedAsync(It.Is<HttpRequest>(v => v.Method == HttpMethod.Post), Subject.Definition))
+                .ReturnsAsync((HttpRequest r, IndexerDefinition _) => new HttpResponse(r, new HttpHeader { { "Content-Type", "application/json" } }, new CookieCollection(), magnet));
+
+            var releases = (await Subject.Fetch(new BasicSearchCriteria { Categories = Array.Empty<int>() })).Releases;
+
+            releases.Should().HaveCount(2);
+            var first = (TorrentInfo)releases.First();
+            first.MagnetUrl.Should().Contain("magnet:?xt=urn:btih:");
+
+            Mocker.GetMock<IIndexerHttpClient>()
+                .Verify(
+                    o => o.ExecuteProxiedAsync(It.Is<HttpRequest>(v => v.Method == HttpMethod.Get), Subject.Definition),
+                    Times.Never());
+
+            Mocker.GetMock<IIndexerHttpClient>()
+                .Verify(
+                    o => o.ExecuteAsync(It.Is<HttpRequest>(v =>
+                        v.Url.FullUri == "http://localhost:8191/v1" &&
+                        v.GetContent().Contains("request.get"))),
+                    Times.Once());
+
+            Mocker.GetMock<IIndexerHttpClient>()
+                .Verify(
+                    o => o.ExecuteProxiedAsync(
+                        It.Is<HttpRequest>(v =>
+                            v.Method == HttpMethod.Post &&
+                            v.Headers.UserAgent == "FlareSolverr-UA/1.0" &&
+                            v.Cookies["cf_clearance"] == "abc123" &&
+                            v.Cookies["__cf_bm"] == "bm456"),
+                        Subject.Definition),
+                    Times.AtLeastOnce());
+        }
+
+        [Test]
         public void should_map_anime_category_and_capabilities()
         {
             Subject.Capabilities.Categories.MapTorznabCapsToTrackers(new[] { NewznabStandardCategory.TVAnime.Id })
